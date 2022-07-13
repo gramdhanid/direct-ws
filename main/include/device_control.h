@@ -20,34 +20,57 @@
 //#define CONFIG_TARGET_ESP8266_DEVKITC_V1
 #if defined(CONFIG_TARGET_WITTY_CLOUD)
 
-#define GPIO_INPUT_BUTTON 4
+// #define GPIO_INPUT_BUTTON 4
 
-#define GPIO_OUTPUT_MAINLED 15
-#define GPIO_OUTPUT_MAINLED_0 16 /* use as ground */
+// #define GPIO_OUTPUT_MAINLED 15
+// #define GPIO_OUTPUT_MAINLED_0 16 /* use as ground */
 
-#define GPIO_OUTPUT_NOUSE1 12
-#define GPIO_OUTPUT_NOUSE2 13
+// #define GPIO_OUTPUT_NOUSE1 12
+// #define GPIO_OUTPUT_NOUSE2 13
 
 #elif defined(CONFIG_TARGET_ESP8266_DEVKITC_V1)
 
-#define GPIO_INPUT_BUTTON 0
+// #define GPIO_INPUT_BUTTON 0
 
-#define GPIO_OUTPUT_MAINLED 14
-#define GPIO_OUTPUT_MAINLED_0 15 /* use as ground */
+// #define GPIO_OUTPUT_MAINLED 14
+// #define GPIO_OUTPUT_MAINLED_0 15 /* use as ground */
 
-#define GPIO_OUTPUT_NOUSE1 12
-#define GPIO_OUTPUT_NOUSE2 13
+// #define GPIO_OUTPUT_NOUSE1 12
+// #define GPIO_OUTPUT_NOUSE2 13
 
 #else //default
 
 // #define GPIO_OUTPUT_NOTIFICATION_LED 2
-#define GPIO_INPUT_BUTTON 14
 
-#define GPIO_OUTPUT_MAINLED 2
+//1 Gang
+#define GPIO_INPUT_BUTTON 15 //tengah (ini pull)
+#define GPIO_OUTPUT_RELAY 13 //tengah
+
+
+//2 Gang
+#define GPIO_INPUT2_BUTTON1 14
+#define GPIO_INPUT2_BUTTON2 5
+
+#define GPIO_OUTPUT2_RELAY1 11
+#define GPIO_OUTPUT2_RELAY2 4 
+
+//3 Gang
+#define GPIO_INPUT3_BUTTON1 14
+#define GPIO_INPUT3_BUTTON2 15
+#define GPIO_INPUT3_BUTTON3 5
+
+#define GPIO_OUTPUT3_RELAY1 11
+#define GPIO_OUTPUT3_RELAY2 12 
+#define GPIO_OUTPUT3_RELAY3 4 
+
+// #define GPIO_OUTPUT_MAINLED 2 (touch)
+#define GPIO_OUTPUT_MAINLED 2 //pull
 #define GPIO_OUTPUT_MAINLED_0 0 /* use as ground */
 
-#define GPIO_OUTPUT_RELAY 12
-#define GPIO_OUTPUT_NOUSE2 4
+
+#define GPIO_OUTPUT_NOUSE2 4 
+// #define GPIO_OUTPUT_RELAY 3
+// #define GPIO_OUTPUT_NOUSE2 3 
 
 #endif
 
@@ -92,6 +115,8 @@ enum button_event_type {
 };
 
 void change_switch_state(int switch_state);
+void change_switch_state2( int switch_state2);
+void change_switch_state3( int switch_state3);
 void change_led_state(int led_state);
 void button_isr_handler(void *arg);
 int get_button_event(int* button_event_type, int* button_event_count);

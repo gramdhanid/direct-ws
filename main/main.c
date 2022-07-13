@@ -20,17 +20,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "st_dev.h"
-#include "device_control.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 
+#include "st_dev.h"
+#include "device_control.h"
+#include "timers.h"
+
 #include "iot_uart_cli.h"
 #include "iot_cli_cmd.h"
+#include "ota_util.h"
 
 #include "caps_switch.h"
+#include "caps_firmwareUpdate.h"
 
 // onboarding_config_start is null-terminated string
 extern const uint8_t onboarding_config_start[]    asm("_binary_onboarding_config_json_start");
@@ -49,42 +52,183 @@ IOT_CTX* ctx = NULL;
 
 static int noti_led_mode = LED_ANIMATION_MODE_IDLE;
 
-static caps_switch_data_t *cap_switch_data;
+static caps_switch_data_t *cap_switch_data1, *cap_switch_data2, *cap_switch_data3;
+caps_firmwareUpdate_data_t *cap_ota_data;
+
+TaskHandle_t otapolling = NULL;
+TaskHandle_t maintask = NULL;
+TaskHandle_t ota_task_handle = NULL;
+
+TimerHandle_t ota_polling_timer;
+
+// static int get_switch_state(void)
+// {
+//     const char* switch_value = cap_switch_data1->get_switch_value(cap_switch_data1);
+//     int switch_state = SWITCH_OFF;
+
+//     if (!switch_value) {
+//         return -1;
+//     }
+
+//     if (!strcmp(switch_value, caps_helper_switch.attr_switch.value_on)) {
+//         switch_state = SWITCH_ON;
+//     } else if (!strcmp(switch_value, caps_helper_switch.attr_switch.value_off)) {
+//         switch_state = SWITCH_OFF;
+//     }
+//     return switch_state;
+// }
+
+// static void cap_switch_cmd_cb(struct caps_switch_data *caps_data)
+// {
+//     int switch_state = get_switch_state();
+//     change_switch_state(switch_state);
+//     //change_led_state(switch_state);
+// }
+
+// dua
+
 
 static int get_switch_state(void)
 {
-    const char* switch_value = cap_switch_data->get_switch_value(cap_switch_data);
-    int switch_state = SWITCH_OFF;
+    const char* switch_value = cap_switch_data2->get_switch_value(cap_switch_data2);
+    int switch_state2 = SWITCH_OFF;
 
     if (!switch_value) {
         return -1;
     }
 
     if (!strcmp(switch_value, caps_helper_switch.attr_switch.value_on)) {
-        switch_state = SWITCH_ON;
+        switch_state2 = SWITCH_ON;
     } else if (!strcmp(switch_value, caps_helper_switch.attr_switch.value_off)) {
-        switch_state = SWITCH_OFF;
+        switch_state2 = SWITCH_OFF;
     }
-    return switch_state;
+    return switch_state2;
 }
 
 static void cap_switch_cmd_cb(struct caps_switch_data *caps_data)
 {
-    int switch_state = get_switch_state();
-    change_switch_state(switch_state);
+    int switch_state2 = get_switch_state();
+    change_switch_state(switch_state2);
     //change_led_state(switch_state);
+}
+
+///..
+
+static char *get_current_firmware_version(void)
+{
+    char *current_version = NULL;
+
+    unsigned char *device_info = (unsigned char *) device_info_start;
+    unsigned int device_info_len = device_info_end - device_info_start;
+
+    ota_err_t err = ota_api_get_firmware_version_load(device_info, device_info_len, &current_version);
+    if (err != OTA_OK) {
+        printf("ota_api_get_firmware_version_load is failed : %d\n", err);
+    }
+
+    return current_version;
+}
+
+#define OTA_UPDATE_MAX_RETRY_COUNT 3
+
+static void ota_update_task(void * pvParameter)
+{
+    printf("\n Starting OTA...\n");
+
+    static int count = 0;
+
+    while (1) {
+
+        ota_err_t ret = ota_update_device();
+        if (ret != OTA_OK) {
+            printf("Firmware Upgrades Failed (%d) \n", ret);
+            vTaskDelay(600 * 1000 / portTICK_PERIOD_MS);
+            count++;
+        } else {
+            break;
+        }
+
+        if (count > OTA_UPDATE_MAX_RETRY_COUNT)
+            break;
+    }
+
+    printf("Prepare to restart system!");
+    ota_restart_device();
+}
+
+// void ota_polling_task(void *arg)
+// {
+//     while (1) {
+
+//         vTaskDelay(30 * 1000 / portTICK_PERIOD_MS);
+
+//         if (g_iot_status != IOT_STATUS_CONNECTING || g_iot_stat_lv != IOT_STAT_LV_DONE) {
+//             continue;
+//         }
+
+//         if (ota_task_handle != NULL) {
+//             printf("Device is updating.. \n");
+//             continue;
+//         }
+
+//         ota_check_for_update((void *)arg);
+
+// 	/* Set polling period */
+// 	unsigned int polling_day = ota_get_polling_period_day();
+// 	//unsigned int task_delay_sec = polling_day * 24 * 3600;
+//     unsigned int task_delay_sec = 30;
+// 	vTaskDelay(task_delay_sec * 1000 / portTICK_PERIOD_MS);
+//     }
+// }
+
+static void cap_update_cmd_cb(struct caps_firmwareUpdate_data *caps_data)
+{
+	ota_nvs_flash_init();
+    xTimerStop(ota_polling_timer, 0);
+    // if (otapolling != NULL) {
+    //     vTaskDelete(otapolling);
+    // }
+	xTaskCreate(&ota_update_task, "ota_update_task", 8096, NULL, 5, &ota_task_handle);
 }
 
 static void capability_init()
 {
-    cap_switch_data = caps_switch_initialize(ctx, "main", NULL, NULL);
-    if (cap_switch_data) {
+    cap_switch_data1 = caps_switch_initialize(ctx, "main", NULL, NULL);
+    cap_switch_data2 = caps_switch_initialize(ctx,"switch2", NULL, NULL);
+    cap_switch_data3 = caps_switch_initialize(ctx,"switch2", NULL, NULL);
+    cap_ota_data = caps_firmwareUpdate_initialize(ctx, "main", NULL, NULL);
+    if (cap_switch_data1) {
         const char *switch_init_value = caps_helper_switch.attr_switch.value_on;
 
-        cap_switch_data->cmd_on_usr_cb = cap_switch_cmd_cb;
-        cap_switch_data->cmd_off_usr_cb = cap_switch_cmd_cb;
+        cap_switch_data1->cmd_on_usr_cb = cap_switch_cmd_cb;
+        cap_switch_data1->cmd_off_usr_cb = cap_switch_cmd_cb;
 
-        cap_switch_data->set_switch_value(cap_switch_data, switch_init_value);
+        cap_switch_data1->set_switch_value(cap_switch_data1, switch_init_value);
+    }
+    if (cap_switch_data2) {
+        const char *switch_init_value = caps_helper_switch.attr_switch.value_on;
+
+        cap_switch_data2->cmd_on_usr_cb = cap_switch_cmd_cb;
+        cap_switch_data2->cmd_off_usr_cb = cap_switch_cmd_cb;
+
+        cap_switch_data2->set_switch_value(cap_switch_data2, switch_init_value);
+    }
+    if (cap_switch_data3) {
+        const char *switch_init_value = caps_helper_switch.attr_switch.value_on;
+
+        cap_switch_data3->cmd_on_usr_cb = cap_switch_cmd_cb;
+        cap_switch_data3->cmd_off_usr_cb = cap_switch_cmd_cb;
+
+        cap_switch_data3->set_switch_value(cap_switch_data3, switch_init_value);
+    }
+    if (cap_ota_data) {
+
+        char *firmware_version = get_current_firmware_version();
+
+        cap_ota_data->set_currentVersion_value(cap_ota_data, firmware_version);
+        cap_ota_data->cmd_updateFirmware_usr_cb = cap_update_cmd_cb;
+
+        free(firmware_version);
     }
 }
 
@@ -181,13 +325,13 @@ void button_event(IOT_CAP_HANDLE *handle, int type, int count)
                     if (get_switch_state() == SWITCH_ON) {
                         change_switch_state(SWITCH_OFF);
                         //change_led_state(LED_OFF);
-                        cap_switch_data->set_switch_value(cap_switch_data, caps_helper_switch.attr_switch.value_off);
-                        cap_switch_data->attr_switch_send(cap_switch_data);
+                        cap_switch_data1->set_switch_value(cap_switch_data1, caps_helper_switch.attr_switch.value_off);
+                        cap_switch_data1->attr_switch_send(cap_switch_data1);
                     } else {
                         change_switch_state(SWITCH_ON);
                         //change_led_state(LED_ON);
-                        cap_switch_data->set_switch_value(cap_switch_data, caps_helper_switch.attr_switch.value_on);
-                        cap_switch_data->attr_switch_send(cap_switch_data);
+                        cap_switch_data1->set_switch_value(cap_switch_data1, caps_helper_switch.attr_switch.value_on);
+                        cap_switch_data1->attr_switch_send(cap_switch_data1);
                     }
                 }
                 break;
@@ -202,7 +346,7 @@ void button_event(IOT_CAP_HANDLE *handle, int type, int count)
         }
     } else if (type == BUTTON_LONG_PRESS) {
         printf("Button long press, iot_status: %d\n", g_iot_status);
-        led_blink(get_switch_state(), 100, 3);
+        led_blink(get_switch_state(), 100, 10);
         st_conn_cleanup(ctx, false);
         xTaskCreate(connection_start_task, "connection_task", 2048, NULL, 10, NULL);
     }
@@ -214,7 +358,7 @@ static void app_main_task(void *arg)
 
     int button_event_type;
     int button_event_count;
-
+    int count = 0;
     for (;;) {
         if (get_button_event(&button_event_type, &button_event_count)) {
             button_event(handle, button_event_type, button_event_count);
@@ -222,9 +366,45 @@ static void app_main_task(void *arg)
         if (noti_led_mode != LED_ANIMATION_MODE_IDLE) {
             change_led_mode(noti_led_mode);
         }
+        // if (count >6000) {
+        //     if (g_iot_status != IOT_STATUS_CONNECTING || g_iot_stat_lv != IOT_STAT_LV_DONE) {
+        //     }
+        //     else if (ota_task_handle != NULL) {
+        //         printf("Device is updating.. \n");
+        //         //xTimerStop(ota_polling_timer,0);
+        //     }
+        //     else {
+        //         printf("check update1\n");
+        //         ota_check_for_update((void *)cap_ota_data);
+        //         count = 0;
+        //     }
+        // }
+        // count++;
 
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+}
+
+static void polling_timer(TimerHandle_t xTimer) {
+    vTaskDelete(maintask);
+    printf("Poling runing!\n");
+    //vTaskDelay(10 * 1000 / portTICK_PERIOD_MS);
+    //
+    if (g_iot_status != IOT_STATUS_CONNECTING || g_iot_stat_lv != IOT_STAT_LV_DONE) {
+            
+    }
+    else if (ota_task_handle != NULL) {
+            printf("Device is updating.. \n");
+            //xTimerStop(ota_polling_timer,0);
+    }
+    else {
+        
+        ota_check_for_update((void *)cap_ota_data);
+    
+    }
+    //vTaskDelay(30 * 1000 / portTICK_PERIOD_MS);
+    //vTaskResume(maintask);
+    xTaskCreate(app_main_task, "app_main_task", 4096, NULL, 10, &maintask);
 }
 
 void app_main(void)
@@ -272,8 +452,20 @@ void app_main(void)
     iot_gpio_init();
     register_iot_cli_cmd();
     uart_cli_main();
-    xTaskCreate(app_main_task, "app_main_task", 4096, NULL, 10, NULL);
+    printf("main_task created\n");
+    xTaskCreate(app_main_task, "app_main_task", 4096, NULL, 10, &maintask);
 
+    ota_polling_timer = xTimerCreate(  "iotc timer",
+                                30000/portTICK_PERIOD_MS,
+                                 pdFALSE,
+                                 (void *)0,
+                                 polling_timer);
+    
+    xTimerStart(ota_polling_timer, 0);
+    printf("ota Polling task started\n");
+   // xTaskCreate(ota_polling_task, "ota_polling_task", 8096, (void *)cap_ota_data, 10, &otapolling);
+    
+    //xTaskCreate(ota_polling_task, "ota_polling_task", 8096, (void *)cap_ota_data, 5, NULL);
     // connect to server
     connection_start();
 }
